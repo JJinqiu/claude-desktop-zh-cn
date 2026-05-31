@@ -40,6 +40,27 @@ MANAGED_SETTINGS_KEYWORDS = (
     "gateway auth scheme",
 )
 
+REQUIRED_FRONTEND_TEXTS = (
+    "High-contrast dark theme",
+    "Use a darker, near-black background when dark mode is on.",
+    "Interface font",
+    "Transcript text size",
+    "Dynamic workflows",
+    "Let Claude run multiple agents in parallel for complex tasks. Workflows can use a lot of your usage limit quickly.",
+    "Cowork files",
+    "Your artifacts and scheduled tasks are stored at {path}.",
+    "Enable the Cowork tab. Claude works on longer tasks like research, analysis, and documents.",
+    "Enable the Code tab. Claude writes and runs code.",
+    "These apply regardless of which surfaces are enabled.",
+    "Hostnames the agent's tools may reach from the Cowork and Code tabs. Also surfaced under Egress Requirements.",
+    "Built-in tools removed from Cowork.",
+    'Per-tool approval policy. "ask" requires user approval before each call; "allow" is the default. Use Disabled built-in tools to remove a tool entirely.',
+    "Add policy",
+    "Collapse sidebar",
+    "Change",
+    "Customize",
+)
+
 VARIABLE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?=[},])")
 TAG_RE = re.compile(r"</?([A-Za-z][A-Za-z0-9]*)\b[^>]*>")
 
@@ -93,6 +114,21 @@ def has_code_keyword(text: str) -> bool:
     return any(keyword in lowered for keyword in CODE_KEYWORDS + MANAGED_SETTINGS_KEYWORDS)
 
 
+def required_frontend_text_keys(en: dict[str, str]) -> list[str]:
+    required: list[str] = []
+    missing_texts: list[str] = []
+    for text in REQUIRED_FRONTEND_TEXTS:
+        matches = [key for key, value in en.items() if str(value) == text]
+        if not matches:
+            missing_texts.append(text)
+            continue
+        required.extend(matches)
+    if missing_texts:
+        sample = "\n".join(f"  {text}" for text in missing_texts)
+        raise AssertionError(f"Cannot find required frontend source texts in en-US.json:\n{sample}")
+    return sorted(set(required))
+
+
 def placeholders(text: str) -> set[str]:
     variables = {f"{{{name}}}" for name in VARIABLE_RE.findall(text)}
     tags = {f"<{name}>" for name in TAG_RE.findall(text)}
@@ -103,7 +139,10 @@ def main() -> int:
     en = load_json(frontend_en_us_path())
     zh = load_json(FRONTEND_ZH_CN)
 
-    required_keys = sorted(key for key, value in en.items() if has_code_keyword(str(value)))
+    required_keys = sorted(
+        set(key for key, value in en.items() if has_code_keyword(str(value)))
+        | set(required_frontend_text_keys(en))
+    )
     missing = [key for key in required_keys if key not in zh]
     if missing:
         sample = "\n".join(f"  {key}: {en[key]}" for key in missing[:30])
