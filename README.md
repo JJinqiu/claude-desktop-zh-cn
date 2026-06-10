@@ -4,7 +4,7 @@
 
 macOS 可双击 `install-mac.command`，Windows 可右键管理员运行 `install-windows.bat`，给 Claude Desktop 添加中文语言选项，并安装中文界面资源。
 
-本汉化方案支持使用 API 和官方订阅的方式。
+本汉化方案支持使用 API 和官方订阅的方式。第三方api请先参照 https://linux.do/t/topic/2032192 配置。
 
 
 **遇到问题请及时反馈，欢迎扫码加入 claude desktop 交流。**
@@ -53,6 +53,10 @@ macOS 可双击 `install-mac.command`，Windows 可右键管理员运行 `instal
 6. Claude 会自动重新打开。
 7. 如果没有自动切换，打开左下角账号菜单，选择 `Language` -> 对应的中文选项。
 
+如果需要调整自动更新，可再次运行 `install-mac.command`，选择 `4`，再输入 `y` 禁止自动更新，或输入 `n` 允许自动更新。
+
+如果需要把 CC Switch skills 同步到 Claude Desktop，可再次运行 `install-mac.command`，选择 `5`，再输入 `y` 同步，或输入 `n` 删除之前的同步。脚本会扫描 `~/.cc-switch/skills` 下所有包含 `SKILL.md` 的 skill；同步时只把 Claude Desktop 中尚不存在的 skill 以软链接加入本地 skills 目录并更新 Claude Desktop 的 skills manifest，同名 skill 会跳过；删除同步时只清理指向 `~/.cc-switch/skills` 的软链接和对应 manifest 记录，不删除 CC Switch 源目录，也不覆盖或删除 Desktop 里已有版本。同步或删除后重启 Claude Desktop 生效。
+
 ### Windows
 
 1. 退出 Claude Desktop。
@@ -63,6 +67,8 @@ macOS 可双击 `install-mac.command`，Windows 可右键管理员运行 `instal
    - `2` 安装中文补丁（官方账号登录模式：仅启用 Claude.ai 登录 / 在线页面汉化，不修改第三方模型名校验）
    - `3` 安装中文补丁（第三方 API 实验模式：包含模式 2，并去除 3P 模型名限制；Cowork 沙箱/截图工作区可能不可用）
    - `4` 恢复原样 / 卸载补丁
+   - `5` 自动更新设置（`y` 开启自动更新，`n` 停止自动更新）
+   - `6` 同步 CC Switch skills（`y` 开启同步，`n` 删除同步）
 5. 安装时再选择语言：
    - `1` 简体中文
    - `2` 繁体中文（中国台湾）
@@ -98,6 +104,8 @@ macOS 可双击 `install-mac.command`，Windows 可右键管理员运行 `instal
 - 写入 `~/Library/Application Support/Claude/config.json`，设置 `"locale"` 为所选语言代码（`zh-CN`、`zh-TW` 或 `zh-HK`），并在 `claude.ai` 页面加载前同步其前端语言状态。
 - 对修改后的 Claude.app 及其内部 app/framework/原生二进制做一致的本机 ad-hoc 重签名，并清除 `com.apple.quarantine` 隔离属性。
 - 重新启动 Claude。
+- 可选菜单项 `4` 用 `y/n` 控制 Claude-3p 自动更新：`y` 禁止自动更新，`n` 允许自动更新。
+- 可选菜单项 `5` 用 `y/n` 控制 CC Switch skills 同步：`y` 会把 `~/.cc-switch/skills` 中缺失的 skill 软链接到 Claude Desktop 的本地 skills 目录，并更新对应 `manifest.json`；`n` 只删除之前同步产生的 CC Switch 软链接和对应 manifest 记录。该操作不需要管理员权限，不会覆盖同名 skill。
 
 ## Windows 脚本会做什么
 
@@ -113,6 +121,8 @@ macOS 可双击 `install-mac.command`，Windows 可右键管理员运行 `instal
 - 第三方 API 实验模式会对 unpackaged 版本的 `resources\app.asar` 做等长补丁，关闭 3P gateway 启动阶段的 `inferenceModels` Anthropic 名称校验，并同步更新 asar 内部文件完整性信息和 `Claude.exe` 内嵌的 asar header hash。
 - Windows 的模式 2 和 3 会直接改写当前 Claude 的 `app.asar` 并同步改写 `Claude.exe` 内嵌完整性哈希，导致 Authenticode 签名 `HashMismatch`；Cowork VM 服务可能拒绝客户端并报 `RPC pipe closed`。如果需要 Cowork 沙箱/截图工作区，请使用模式 1，并通过网关/ccswitch 模型别名映射解决第三方模型名校验。
 - 写入 Windows 用户配置，将语言设置为所选语言代码（`zh-CN`、`zh-TW` 或 `zh-HK`）。
+- 可选菜单项 `5` 用 `y/n` 控制 Claude-3p 自动更新：`y` 开启自动更新，`n` 停止自动更新。
+- 可选菜单项 `6` 用 `y/n` 控制 CC Switch skills 同步：`y` 会把 `%USERPROFILE%\.cc-switch\skills` 中缺失的 skill 以软链接加入 Claude Desktop 的本地 skills 目录，并把 `SKILL.md` frontmatter 里的 `name` 和 `description` 写入对应 `manifest.json`；`n` 只删除之前同步产生、且指向 CC Switch skills 目录内的软链接和对应 manifest 记录。脚本会从当前用户的 AppData 动态扫描 Claude-3p skills plugin，不写死 session UUID，不覆盖同名 skill，也不删除 CC Switch 源目录。
 - 重启 Claude Desktop。
 
 ## 卸载 / 恢复

@@ -5,7 +5,7 @@
     [string]$PatchMode = "full",
 
     [Parameter(Position = 0)]
-    [ValidateSet("install", "uninstall")]
+    [ValidateSet("install", "uninstall", "disable-updates", "enable-updates", "sync-skills", "unsync-skills")]
     [string]$Action = "install",
 
     [Parameter(Position = 1)]
@@ -118,20 +118,44 @@ function Read-InteractiveSelection {
     Write-Host "[2] 安装中文补丁(官方账号登录方式：Cowork 沙箱/工作区不可用)"
     Write-Host "[3] 安装中文补丁(第三方 API 登录方式：同时去除模型限制；Cowork 沙箱/工作区不可用)"
     Write-Host "[4] 恢复原样 / 卸载补丁"
+    Write-Host "[5] 自动更新设置（y=开启自动更新，n=停止自动更新）"
+    Write-Host "[6] 同步 CC Switch skills（y=开启同步，n=删除同步）"
     Write-Host "[Q] 退出"
     Write-Host ""
 
     $patchModeForInstall = "full"
     $actionSelected = $false
     while (-not $actionSelected) {
-        $actionSelection = (Read-Host "请选择操作 [1/2/3/4/Q]").Trim()
+        $actionSelection = (Read-Host "请选择操作 [1/2/3/4/5/6/Q]").Trim()
         switch -Regex ($actionSelection) {
             '^[1]$' { $patchModeForInstall = "safe"; $actionSelected = $true }
             '^[2]$' { $patchModeForInstall = "official"; $actionSelected = $true }
             '^[3]$' { $patchModeForInstall = "full"; $actionSelected = $true }
             '^[4]$' { return @{ Action = "uninstall"; Language = "zh-CN"; PatchMode = "safe" } }
+            '^[5]$' {
+                $updateChoice = (Read-Host "是否开启自动更新？[y=开启自动更新 / n=停止自动更新]").Trim()
+                switch -Regex ($updateChoice) {
+                    '^[Yy]$' { return @{ Action = "enable-updates"; Language = "zh-CN"; PatchMode = "safe" } }
+                    '^[Nn]$' { return @{ Action = "disable-updates"; Language = "zh-CN"; PatchMode = "safe" } }
+                    default {
+                        Write-Host "无效输入，请输入 y 开启自动更新，或输入 n 停止自动更新。" -ForegroundColor Yellow
+                        continue
+                    }
+                }
+            }
+            '^[6]$' {
+                $skillsChoice = (Read-Host "是否同步 CC Switch skills？[y=开启同步 / n=删除同步]").Trim()
+                switch -Regex ($skillsChoice) {
+                    '^[Yy]$' { return @{ Action = "sync-skills"; Language = "zh-CN"; PatchMode = "safe" } }
+                    '^[Nn]$' { return @{ Action = "unsync-skills"; Language = "zh-CN"; PatchMode = "safe" } }
+                    default {
+                        Write-Host "无效输入，请输入 y 开启同步，或输入 n 删除同步。" -ForegroundColor Yellow
+                        continue
+                    }
+                }
+            }
             '^[Qq]$' { exit 0 }
-            default { Write-Host "请输入 1、2、3、4 或 Q。" -ForegroundColor Yellow }
+            default { Write-Host "请输入 1、2、3、4、5、6 或 Q。" -ForegroundColor Yellow }
         }
     }
 
@@ -1160,9 +1184,9 @@ function Register-Language {
     )
 
     $assetsDir = Join-Path $ResourcesPath "ion-dist\assets\v1"
-    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "index-*.js") -ErrorAction SilentlyContinue)
+    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "*.js") -ErrorAction SilentlyContinue)
     if ($jsFiles.Count -eq 0) {
-        throw "未找到前端 index-*.js: $assetsDir"
+        throw "未找到前端 JS bundle: $assetsDir"
     }
 
     $regex = [System.Text.RegularExpressions.Regex]::new($LanguageListPattern)
@@ -1195,9 +1219,9 @@ function Patch-LanguageDisplayNames {
     param([string]$ResourcesPath)
 
     $assetsDir = Join-Path $ResourcesPath "ion-dist\assets\v1"
-    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "index-*.js") -ErrorAction SilentlyContinue)
+    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "*.js") -ErrorAction SilentlyContinue)
     if ($jsFiles.Count -eq 0) {
-        throw "未找到前端 index-*.js: $assetsDir"
+        throw "未找到前端 JS bundle: $assetsDir"
     }
 
     $marker = "__claudeZhLabelPatch"
@@ -1225,7 +1249,7 @@ function Unregister-Language {
     param([string]$ResourcesPath)
 
     $assetsDir = Join-Path $ResourcesPath "ion-dist\assets\v1"
-    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "index-*.js") -ErrorAction SilentlyContinue)
+    $jsFiles = @(Get-ChildItem (Join-Path $assetsDir "*.js") -ErrorAction SilentlyContinue)
     foreach ($file in $jsFiles) {
         $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
         $updated = $text
@@ -1276,12 +1300,32 @@ function Test-PlainUiTextReplacement {
     return $true
 }
 
+function Test-StructuralJsReplacement {
+    param([string]$Source)
+
+    $structuralStrings = @(
+        "hour", "hours",
+        "minute", "minutes",
+        "second", "seconds",
+        "day", "days",
+        "week", "weeks",
+        "month", "months",
+        "year", "years"
+    )
+    $structuralLiterals = @('"Search"')
+    return ($structuralStrings -contains $Source) -or ($structuralLiterals -contains $Source)
+}
+
 function Replace-FrontendHardcodedText {
     param(
         [string]$Text,
         [string]$Source,
         [string]$Target
     )
+
+    if (Test-StructuralJsReplacement $Source) {
+        return @{ Text = $Text; Count = 0 }
+    }
 
     if (-not (Test-PlainUiTextReplacement $Source)) {
         $occurrences = 0
@@ -1300,7 +1344,7 @@ function Replace-FrontendHardcodedText {
         return @{ Text = $Text; Count = 0 }
     }
 
-    $pattern = '(?<![A-Za-z0-9_$])' + [System.Text.RegularExpressions.Regex]::Escape($Source) + '(?![A-Za-z0-9_$])'
+    $pattern = '(?<quote>["''`])' + [System.Text.RegularExpressions.Regex]::Escape($Source) + '\k<quote>'
     $script:__frontendReplacementCount = 0
     $patched = [System.Text.RegularExpressions.Regex]::Replace(
         $Text,
@@ -1308,7 +1352,8 @@ function Replace-FrontendHardcodedText {
         {
             param($match)
             $script:__frontendReplacementCount += 1
-            return $Target
+            $quote = $match.Groups["quote"].Value
+            return "$quote$Target$quote"
         }
     )
     $count = $script:__frontendReplacementCount
@@ -1386,10 +1431,49 @@ function Get-OnlineDomTranslationScript {
     Write-Host "  serializing online DOM translation script" -ForegroundColor DarkGray
     $mappingJson = $Mapping | ConvertTo-Json -Compress -Depth 100
     $languageJson = $Language | ConvertTo-Json -Compress
+    if ($Language -eq "zh-CN") {
+        $selectedText = "已选择 `$1 项"
+        $deleteSelectedText = "删除 `$1 个所选项目"
+    } else {
+        $selectedText = "已選擇 `$1 項"
+        $deleteSelectedText = "刪除 `$1 個所選項目"
+    }
+    $selectedTextJson = $selectedText | ConvertTo-Json -Compress
+    $deleteSelectedTextJson = $deleteSelectedText | ConvertTo-Json -Compress
     $template = @'
-(()=>{try{const L=__LANGUAGE__,M=__MAPPING__;localStorage.setItem("spa:locale",L);document.documentElement&&document.documentElement.setAttribute("lang",L);const N=s=>(s||"").replace(/\s+/g," ").trim();const G=[[/^Morning, (.+)$/,"早上好，$1"],[/^Good morning, (.+)$/,"早上好，$1"],[/^Afternoon, (.+)$/,"下午好，$1"],[/^Good afternoon, (.+)$/,"下午好，$1"],[/^Evening, (.+)$/,"晚上好，$1"],[/^Good evening, (.+)$/,"晚上好，$1"],[/^It's late-night (.+)$/,"夜深了，$1"],[/^Good night, (.+)$/,"晚安，$1"],[/^Delete (\d+) chat$/,"删除 $1 个聊天"],[/^Delete (\d+) chats$/,"删除 $1 个聊天"],[/^Move (\d+) chat to a project$/,"将 $1 个聊天移至项目"],[/^Move (\d+) chats to a project$/,"将 $1 个聊天移至项目"],[/^Connection needs (\d+) field$/,"连接还需要填写 $1 个字段"],[/^Connection needs (\d+) fields$/,"连接还需要填写 $1 个字段"],[/^needs (\d+) field$/,"还需要填写 $1 个字段"],[/^needs (\d+) fields$/,"还需要填写 $1 个字段"],[/^Are you sure you want to delete (\d+) chat\? This cannot be undone\.$/,"你确定要删除 $1 个聊天吗？此操作无法撤消。"],[/^Are you sure you want to delete (\d+) chats\? This cannot be undone\.$/,"你确定要删除 $1 个聊天吗？此操作无法撤消。"],[/^Are you sure you want to permanently delete this chat\? This cannot be undone\.$/,"你确定要永久删除此聊天吗？此操作无法撤消。"],[/^Are you sure you want to permanently delete these chats\? This cannot be undone\.$/,"你确定要永久删除这些聊天吗？此操作无法撤消。"]];const R=s=>{const n=N(s);if(M[n])return M[n];for(const [r,t] of G){const m=n.match(r);if(m)return t.replace("$1",m[1])}};const X=new Set(["SCRIPT","STYLE","NOSCRIPT"]);function T(){try{const b=document.body||document.documentElement;if(!b)return;const w=document.createTreeWalker(b,NodeFilter.SHOW_TEXT,{acceptNode(n){const p=n.parentElement;if(!p||X.has(p.tagName)||!R(n.nodeValue))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT}});let n;while(n=w.nextNode()){const v=R(n.nodeValue);if(v)n.nodeValue=v}document.querySelectorAll("[aria-label],[title],[placeholder],input,textarea").forEach(e=>{["aria-label","title","placeholder","value"].forEach(a=>{try{if(a==="value"&&!(e.matches("input[type=button],input[type=submit]")))return;const v=e.getAttribute?e.getAttribute(a):e[a];const t=R(v);if(t){if(e.setAttribute)e.setAttribute(a,t);else e[a]=t}}catch{}})});document.querySelectorAll("a").forEach(e=>{try{const r=e.getBoundingClientRect(),txt=N(e.textContent);if(txt==="Claude"&&r.left<100&&r.top<100)e.style.visibility="hidden"}catch{}})}catch{}}T();new MutationObserver(()=>{clearTimeout(window.__claudeZhDomTimer);window.__claudeZhDomTimer=setTimeout(T,30)}).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});}catch(e){}})()
+(()=>{try{
+const L=__LANGUAGE__,M=__MAPPING__,ST=__SELECTED_TEXT__,DST=__DELETE_SELECTED_TEXT__;
+localStorage.setItem("spa:locale",L);
+document.documentElement&&document.documentElement.setAttribute("lang",L);
+const N=s=>(s||"").replace(/\s+/g," ").trim();
+const G=[
+[/^Morning, (.+)$/,"早上好，$1"],[/^Good morning, (.+)$/,"早上好，$1"],
+[/^Afternoon, (.+)$/,"下午好，$1"],[/^Good afternoon, (.+)$/,"下午好，$1"],
+[/^Evening, (.+)$/,"晚上好，$1"],[/^Good evening, (.+)$/,"晚上好，$1"],
+[/^It's late-night (.+)$/,"夜深了，$1"],[/^Good night, (.+)$/,"晚安，$1"],
+[/^Delete (\d+) chat$/,"删除 $1 个聊天"],[/^Delete (\d+) chats$/,"删除 $1 个聊天"],
+[/^Move (\d+) chat to a project$/,"将 $1 个聊天移至项目"],[/^Move (\d+) chats to a project$/,"将 $1 个聊天移至项目"],
+[/^Connection needs (\d+) field$/,"连接还需要填写 $1 个字段"],[/^Connection needs (\d+) fields$/,"连接还需要填写 $1 个字段"],
+[/^needs (\d+) field$/,"还需要填写 $1 个字段"],[/^needs (\d+) fields$/,"还需要填写 $1 个字段"],
+[/^Are you sure you want to delete (\d+) chat\? This cannot be undone\.$/,"你确定要删除 $1 个聊天吗？此操作无法撤消。"],
+[/^Are you sure you want to delete (\d+) chats\? This cannot be undone\.$/,"你确定要删除 $1 个聊天吗？此操作无法撤消。"],
+[/^Are you sure you want to permanently delete this chat\? This cannot be undone\.$/,"你确定要永久删除此聊天吗？此操作无法撤消。"],
+[/^Are you sure you want to permanently delete these chats\? This cannot be undone\.$/,"你确定要永久删除这些聊天吗？此操作无法撤消。"],
+[/^Archive (\d+) task\? You can find it in the Archived tab\.$/,"要归档 $1 个任务吗？你可以在“已归档”标签页中找到它。"],
+[/^Archive (\d+) tasks\? You can find them in the Archived tab\.$/,"要归档 $1 个任务吗？你可以在“已归档”标签页中找到它们。"],
+[/^(\d+) selected$/,ST],
+[/^Delete (\d+) selected item$/,DST],
+[/^Delete (\d+) selected items$/,DST],
+[/^Mon$/,"周一"],[/^Tue$/,"周二"],[/^Wed$/,"周三"],[/^Thu$/,"周四"],[/^Fri$/,"周五"],[/^Sat$/,"周六"],[/^Sun$/,"周日"]
+];
+const R=s=>{const n=N(s);if(M[n])return M[n];for(const [r,t] of G){const m=n.match(r);if(m)return t.replace("$1",m[1])}};
+const X=new Set(["SCRIPT","STYLE","NOSCRIPT"]);
+function T(){try{const b=document.body||document.documentElement;if(!b)return;const w=document.createTreeWalker(b,NodeFilter.SHOW_TEXT,{acceptNode(n){const p=n.parentElement;if(!p||X.has(p.tagName)||!R(n.nodeValue))return NodeFilter.FILTER_REJECT;return NodeFilter.FILTER_ACCEPT}});let n;while(n=w.nextNode()){const v=R(n.nodeValue);if(v)n.nodeValue=v}document.querySelectorAll("[role=dialog] p,[role=dialog] div,[role=dialog] span").forEach(e=>{try{if(e.closest("button,[contenteditable]"))return;const t=R(e.textContent);if(t&&N(e.textContent)!==N(t))e.textContent=t}catch{}});document.querySelectorAll("[aria-label],[title],[placeholder],input,textarea").forEach(e=>{["aria-label","title","placeholder","value"].forEach(a=>{try{if(a==="value"&&!(e.matches("input[type=button],input[type=submit]")))return;let v=e.getAttribute?e.getAttribute(a):void 0;if(v==null&&a in e)v=e[a];const t=R(v);if(t){if(e.setAttribute)e.setAttribute(a,t);try{if(a in e)e[a]=t}catch{}}}catch{}})});document.querySelectorAll("a").forEach(e=>{try{const r=e.getBoundingClientRect(),txt=N(e.textContent);if(txt==="Claude"&&r.left<100&&r.top<100)e.style.visibility="hidden"}catch{}})}catch{}}
+T();
+new MutationObserver(()=>{clearTimeout(window.__claudeZhDomTimer);window.__claudeZhDomTimer=setTimeout(T,30)}).observe(document.documentElement,{subtree:true,childList:true,characterData:true,attributes:true});
+}catch(e){}})()
 '@
-    return $template.Replace("__LANGUAGE__", $languageJson).Replace("__MAPPING__", $mappingJson)
+    return $template.Replace("__LANGUAGE__", $languageJson).Replace("__MAPPING__", $mappingJson).Replace("__SELECTED_TEXT__", $selectedTextJson).Replace("__DELETE_SELECTED_TEXT__", $deleteSelectedTextJson)
 }
 
 function Remove-ExistingOnlineDomTranslationPatch {
@@ -1611,8 +1695,27 @@ function Patch-HardcodedFrontendStrings {
     $replacements = @(Get-FrontendHardcodedReplacements $Language)
     $patchedFiles = 0
     $patchedStrings = 0
+    $fileIndex = 0
+    Write-Host "  [进度] 准备扫描 $($jsFiles.Count) 个前端 JS bundle，硬编码替换规则 $($replacements.Count) 条..." -ForegroundColor DarkGray
     foreach ($file in $jsFiles) {
+        $fileIndex += 1
+        $fileInfo = Get-Item -LiteralPath $file.FullName
+        Write-Host "  [进度] [$fileIndex/$($jsFiles.Count)] 正在读取 $($file.Name) ($(Format-ByteSize $fileInfo.Length))..." -ForegroundColor DarkGray
         $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
+
+        $hasCandidate = $false
+        foreach ($pair in $replacements) {
+            if ($text.Contains($pair[0])) {
+                $hasCandidate = $true
+                break
+            }
+        }
+        if (-not $hasCandidate) {
+            Write-Host "  [进度] [$fileIndex/$($jsFiles.Count)] 跳过 $($file.Name)：未命中待替换文本" -ForegroundColor DarkGray
+            continue
+        }
+
+        Write-Host "  [进度] [$fileIndex/$($jsFiles.Count)] 正在替换 $($file.Name)..." -ForegroundColor DarkGray
         $patched = $text
         $count = 0
         foreach ($pair in $replacements) {
@@ -1631,6 +1734,7 @@ function Patch-HardcodedFrontendStrings {
             $patchedFiles += 1
             $patchedStrings += $count
         }
+        Write-Host "  [进度] [$fileIndex/$($jsFiles.Count)] 完成 $($file.Name)：$count 处替换" -ForegroundColor DarkGray
     }
 
     Write-Host "  patched hardcoded frontend strings: $patchedStrings replacements in $patchedFiles files" -ForegroundColor Green
@@ -2099,35 +2203,620 @@ function Set-ClaudeLocale {
     }
 }
 
-function Test-ThirdPartyApiConfigExists {
-    if (-not $env:LOCALAPPDATA) {
-        return $false
+function Get-ThirdPartyConfigLibraryPaths {
+    $paths = @()
+    if ($env:APPDATA) {
+        $paths += Join-Path $env:APPDATA "Claude-3p\configLibrary"
     }
 
-    $configLibrary = Join-Path $env:LOCALAPPDATA "Claude-3p\configLibrary"
-    if (-not (Test-Path $configLibrary -PathType Container)) {
-        return $false
+    if ($env:LOCALAPPDATA) {
+        $paths += Join-Path $env:LOCALAPPDATA "Claude-3p\configLibrary"
+
+        $packageRoot = Join-Path $env:LOCALAPPDATA "Packages"
+        $packageDirs = @(Get-ChildItem (Join-Path $packageRoot "Claude_*") -Directory -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending)
+        foreach ($packageDir in $packageDirs) {
+            $paths += Join-Path $packageDir.FullName "LocalCache\Roaming\Claude-3p\configLibrary"
+        }
     }
 
-    $entries = @(Get-ChildItem $configLibrary -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
-    return $entries.Count -gt 0
+    return @($paths | Select-Object -Unique)
 }
 
-function Confirm-InstallWithoutThirdPartyApiConfig {
-    if (Test-ThirdPartyApiConfigExists) {
-        return $true
+function Test-ThirdPartyApiInstallMode {
+    return $PatchMode -eq "safe" -or $PatchMode -eq "full"
+}
+
+function Test-NonEmptyConfigValue {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $false
     }
 
-    while ($true) {
-        $selection = (Read-Host "未配置第三方API，程序运行后无效，请参照github上readme修改，是否继续配置？ [y/n]").Trim()
-        switch -Regex ($selection) {
-            '^[Yy]$' { return $true }
-            '^[Nn]$' {
-                Write-Host "已取消配置，未修改 Claude Desktop。" -ForegroundColor Yellow
-                return $false
-            }
-            default { Write-Host "请输入 y 或 n。" -ForegroundColor Yellow }
+    if ($Value -is [string]) {
+        return -not [string]::IsNullOrWhiteSpace($Value)
+    }
+
+    if ($Value -is [array]) {
+        return $Value.Count -gt 0
+    }
+
+    return $true
+}
+
+function Test-ThirdPartyApiConfigObject {
+    param([object]$Config)
+
+    if ($null -eq $Config -or -not ($Config -is [pscustomobject])) {
+        return $false
+    }
+
+    $propertyNames = @($Config.PSObject.Properties.Name)
+    $thirdPartyKeys = @(
+        "inferenceProvider",
+        "inferenceGatewayBaseUrl",
+        "inferenceGatewayApiKey",
+        "inferenceGatewayAuthScheme",
+        "inferenceModels",
+        "inferenceModel",
+        "customModels",
+        "modelList",
+        "provider"
+    )
+
+    foreach ($key in $thirdPartyKeys) {
+        if ($propertyNames -contains $key -and (Test-NonEmptyConfigValue $Config.$key)) {
+            return $true
         }
+    }
+
+    return $false
+}
+
+function Find-ThirdPartyApiConfigs {
+    $matches = @()
+    foreach ($configLibrary in Get-ThirdPartyConfigLibraryPaths) {
+        if (-not (Test-Path $configLibrary -PathType Container)) {
+            continue
+        }
+
+        $configFiles = @(Get-ChildItem $configLibrary -Filter "*.json" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne "_meta.json" } |
+            Sort-Object Name)
+        foreach ($configFile in $configFiles) {
+            try {
+                $config = Get-Content $configFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            }
+            catch {
+                Write-Host "  [警告] 第三方 API 配置 JSON 无法解析，已跳过: $($configFile.FullName)" -ForegroundColor DarkYellow
+                continue
+            }
+
+            if (Test-ThirdPartyApiConfigObject $config) {
+                $matches += $configFile.FullName
+            }
+        }
+    }
+
+    return @($matches)
+}
+
+function Assert-ThirdPartyApiConfigured {
+    $configs = @(Find-ThirdPartyApiConfigs)
+    if ($configs.Count -gt 0) {
+        Write-Host "  已检测到第三方 API 配置:" -ForegroundColor Green
+        foreach ($config in $configs) {
+            Write-Host "    $config" -ForegroundColor DarkGray
+        }
+        return
+    }
+
+    $searched = (Get-ThirdPartyConfigLibraryPaths) -join "; "
+    throw "未检测到第三方 API 配置，已停止汉化。请先在 Claude Desktop / Claude-3p 中完成第三方 API 配置，再重新选择第三方 API 汉化。已搜索: $searched"
+}
+
+function Get-JsonObjectOrBackup {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path -PathType Leaf)) {
+        return [pscustomobject]@{}
+    }
+
+    try {
+        $loaded = Get-Content $Path -Raw | ConvertFrom-Json
+        if ($loaded -is [pscustomobject]) {
+            return $loaded
+        }
+        throw "JSON root is not an object."
+    }
+    catch {
+        $backup = "$Path.bak-invalid"
+        Copy-Item $Path $backup -Force
+        return [pscustomobject]@{}
+    }
+}
+
+function Save-JsonNoBom {
+    param(
+        [string]$Path,
+        [object]$Value,
+        [int]$Depth = 20
+    )
+
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    [System.IO.File]::WriteAllText($Path, $json, $Utf8NoBom)
+}
+
+function Add-OrSetJsonProperty {
+    param(
+        [pscustomobject]$Object,
+        [string]$Name,
+        [object]$Value
+    )
+
+    $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+}
+
+function Ensure-ConfigLibraryEntry {
+    param(
+        [pscustomobject]$Meta,
+        [string]$ConfigId
+    )
+
+    Add-OrSetJsonProperty $Meta "appliedId" $ConfigId
+
+    $entries = @()
+    if ($Meta.PSObject.Properties.Name -contains "entries" -and $Meta.entries) {
+        $entries = @($Meta.entries)
+    }
+
+    foreach ($entry in $entries) {
+        if ($entry -is [pscustomobject] -and [string]$entry.id -eq $ConfigId) {
+            Add-OrSetJsonProperty $Meta "entries" $entries
+            return
+        }
+    }
+
+    $entries += [pscustomobject]@{ id = $ConfigId; name = "Default" }
+    Add-OrSetJsonProperty $Meta "entries" $entries
+}
+
+function Set-ThirdPartyAutoUpdates {
+    param([bool]$Enabled)
+
+    $libraryPaths = @(Get-ThirdPartyConfigLibraryPaths)
+    $existingMetaPaths = @()
+    foreach ($configLibrary in $libraryPaths) {
+        $metaPath = Join-Path $configLibrary "_meta.json"
+        if (Test-Path $metaPath -PathType Leaf) {
+            $existingMetaPaths += $configLibrary
+        }
+    }
+
+    if ($existingMetaPaths.Count -gt 0) {
+        $libraryPaths = $existingMetaPaths
+    } else {
+        $existingLibraryPaths = @()
+        foreach ($configLibrary in $libraryPaths) {
+            if (Test-Path $configLibrary -PathType Container) {
+                $existingLibraryPaths += $configLibrary
+            }
+        }
+
+        if ($existingLibraryPaths.Count -gt 0) {
+            $libraryPaths = $existingLibraryPaths
+        } elseif ($env:APPDATA) {
+            $libraryPaths = @(Join-Path $env:APPDATA "Claude-3p\configLibrary")
+        } elseif ($env:LOCALAPPDATA) {
+            $libraryPaths = @(Join-Path $env:LOCALAPPDATA "Claude-3p\configLibrary")
+        } else {
+            Write-Host "  [警告] APPDATA 和 LOCALAPPDATA 均未设置，无法写入 Claude-3p 自动更新配置。" -ForegroundColor DarkYellow
+            return
+        }
+    }
+
+    $updatedCount = 0
+    foreach ($configLibrary in $libraryPaths) {
+        $metaPath = Join-Path $configLibrary "_meta.json"
+        $creatingLibrary = -not (Test-Path $metaPath -PathType Leaf)
+
+        $meta = Get-JsonObjectOrBackup $metaPath
+        $configId = ""
+        if ($meta.PSObject.Properties.Name -contains "appliedId") {
+            $configId = ([string]$meta.appliedId).Trim()
+        }
+
+        if (-not $configId) {
+            $existingConfigs = @(Get-ChildItem $configLibrary -Filter "*.json" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne "_meta.json" } |
+                Sort-Object Name)
+            if ($existingConfigs.Count -gt 0) {
+                $configId = [System.IO.Path]::GetFileNameWithoutExtension($existingConfigs[0].Name)
+            } else {
+                $configId = [guid]::NewGuid().ToString()
+            }
+        }
+
+        $configPath = Join-Path $configLibrary "$configId.json"
+        $config = Get-JsonObjectOrBackup $configPath
+        Add-OrSetJsonProperty $config "disableAutoUpdates" (-not $Enabled)
+        Ensure-ConfigLibraryEntry $meta $configId
+
+        New-Item -ItemType Directory -Path $configLibrary -Force | Out-Null
+        $config | ConvertTo-Json -Depth 20 | Set-Content $configPath -Encoding UTF8
+        $meta | ConvertTo-Json -Depth 20 | Set-Content $metaPath -Encoding UTF8
+
+        $updatedCount++
+    }
+
+    if ($Enabled) {
+        Write-Host "允许更新成功" -ForegroundColor Green
+    } else {
+        Write-Host "禁止更新成功" -ForegroundColor Green
+    }
+}
+
+function Get-CCSwitchSkillsDirectory {
+    $userProfile = $env:USERPROFILE
+    if (-not $userProfile) {
+        $userProfile = [Environment]::GetFolderPath("UserProfile")
+    }
+    if (-not $userProfile) {
+        throw "无法确定当前用户目录，无法定位 CC Switch skills。"
+    }
+
+    return Join-Path $userProfile ".cc-switch\skills"
+}
+
+function Get-ClaudeSkillsPluginBasePaths {
+    $paths = @()
+    if ($env:LOCALAPPDATA) {
+        $paths += Join-Path $env:LOCALAPPDATA "Claude-3p\local-agent-mode-sessions\skills-plugin"
+    }
+    if ($env:APPDATA) {
+        $paths += Join-Path $env:APPDATA "Claude-3p\local-agent-mode-sessions\skills-plugin"
+    }
+
+    return @($paths | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Find-ClaudeDesktopSkillsPluginRoot {
+    $candidates = @()
+    foreach ($base in Get-ClaudeSkillsPluginBasePaths) {
+        if (-not (Test-Path -LiteralPath $base -PathType Container)) {
+            continue
+        }
+
+        foreach ($orgDir in Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue) {
+            foreach ($pluginDir in Get-ChildItem -LiteralPath $orgDir.FullName -Directory -ErrorAction SilentlyContinue) {
+                $manifestPath = Join-Path $pluginDir.FullName "manifest.json"
+                $skillsDir = Join-Path $pluginDir.FullName "skills"
+                if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and (Test-Path -LiteralPath $skillsDir -PathType Container)) {
+                    $manifest = Get-Item -LiteralPath $manifestPath
+                    $candidates += [pscustomobject]@{
+                        Path = $pluginDir.FullName
+                        ManifestLastWriteTime = $manifest.LastWriteTimeUtc
+                    }
+                }
+            }
+        }
+    }
+
+    if ($candidates.Count -eq 0) {
+        $searched = (Get-ClaudeSkillsPluginBasePaths) -join "; "
+        throw "未找到 Claude Desktop skills plugin 目录。已搜索: $searched"
+    }
+
+    return ($candidates | Sort-Object ManifestLastWriteTime -Descending | Select-Object -First 1).Path
+}
+
+function Read-SkillFrontmatter {
+    param([string]$SkillMdPath)
+
+    $text = Get-Content $SkillMdPath -Raw -Encoding UTF8
+    $lines = $text -split "`r?`n"
+    if ($lines.Count -eq 0 -or $lines[0].Trim() -ne "---") {
+        return @{}
+    }
+
+    $end = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq "---") {
+            $end = $i
+            break
+        }
+    }
+    if ($end -lt 0) {
+        return @{}
+    }
+
+    $data = @{}
+    $key = ""
+    $valueLines = @()
+    $flushFrontmatterValue = {
+        if ($key) {
+            $data[$key] = (($valueLines | ForEach-Object { $_.Trim() }) -join "`n").Trim()
+        }
+        $key = ""
+        $valueLines = @()
+    }
+
+    for ($i = 1; $i -lt $end; $i++) {
+        $line = $lines[$i]
+        if (-not $line.Trim()) {
+            if ($key -and $valueLines.Count -gt 0) {
+                $valueLines += ""
+            }
+            continue
+        }
+
+        if ($line -match '^\s') {
+            if ($key) {
+                $valueLines += $line.Trim()
+            }
+            continue
+        }
+
+        $match = [regex]::Match($line, '^([A-Za-z0-9_-]+):(?:\s*(.*))?$')
+        if (-not $match.Success) {
+            continue
+        }
+
+        . $flushFrontmatterValue
+        $key = $match.Groups[1].Value
+        $value = $match.Groups[2].Value.Trim()
+        if ($value) {
+            $valueLines = @($value)
+        } else {
+            $valueLines = @()
+        }
+    }
+    . $flushFrontmatterValue
+
+    return $data
+}
+
+function Get-CCSwitchSkills {
+    param([string]$SkillsDirectory)
+
+    if (-not (Test-Path -LiteralPath $SkillsDirectory -PathType Container)) {
+        throw "CC Switch skills 目录不存在: $SkillsDirectory"
+    }
+
+    $skills = @()
+    foreach ($dir in Get-ChildItem -LiteralPath $SkillsDirectory -Directory -ErrorAction SilentlyContinue | Sort-Object Name) {
+        $skillMd = Join-Path $dir.FullName "SKILL.md"
+        if (-not (Test-Path -LiteralPath $skillMd -PathType Leaf)) {
+            continue
+        }
+
+        $frontmatter = Read-SkillFrontmatter $skillMd
+        $name = ""
+        if ($frontmatter.ContainsKey("name")) {
+            $name = ([string]$frontmatter["name"]).Trim()
+        }
+        if (-not $name) {
+            $name = $dir.Name
+        }
+        if (-not $name -or $name -eq "." -or $name -eq ".." -or $name.Contains("/") -or $name.Contains("\")) {
+            Write-Host "  [跳过] skill 名称无效: $name" -ForegroundColor DarkYellow
+            continue
+        }
+
+        $description = ""
+        if ($frontmatter.ContainsKey("description")) {
+            $description = ([string]$frontmatter["description"]).Trim()
+        }
+
+        $skills += [pscustomobject]@{
+            Name = $name
+            Description = $description
+            Path = $dir.FullName
+        }
+    }
+
+    return $skills
+}
+
+function Ensure-SkillsManifestList {
+    param([pscustomobject]$Manifest)
+
+    if (-not ($Manifest.PSObject.Properties.Name -contains "skills") -or $null -eq $Manifest.skills -or ($Manifest.skills -is [string])) {
+        Add-OrSetJsonProperty $Manifest "skills" @()
+    }
+}
+
+function Get-ReparsePointTarget {
+    param([string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (-not (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint)) {
+            return ""
+        }
+
+        if ($item.PSObject.Properties.Name -contains "Target" -and $item.Target) {
+            if ($item.Target -is [array]) {
+                return [string]$item.Target[0]
+            }
+            return [string]$item.Target
+        }
+        if ($item.PSObject.Properties.Name -contains "LinkTarget" -and $item.LinkTarget) {
+            return [string]$item.LinkTarget
+        }
+    }
+    catch {
+        return ""
+    }
+
+    return ""
+}
+
+function Resolve-ExistingPath {
+    param([string]$Path)
+
+    try {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    catch {
+        return ""
+    }
+}
+
+function Test-PathWithinDirectory {
+    param(
+        [string]$Path,
+        [string]$Parent
+    )
+
+    $fullPath = Resolve-ExistingPath $Path
+    $fullParent = Resolve-ExistingPath $Parent
+    if (-not $fullPath -or -not $fullParent) {
+        return $false
+    }
+
+    $fullParent = $fullParent.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    return $fullPath.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($fullParent + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $fullPath.StartsWith($fullParent + [System.IO.Path]::AltDirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Remove-ReparsePoint {
+    param([string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (($item.Attributes -band [System.IO.FileAttributes]::Directory) -eq [System.IO.FileAttributes]::Directory) {
+        [System.IO.Directory]::Delete($Path, $false)
+    } else {
+        [System.IO.File]::Delete($Path)
+    }
+}
+
+function Sync-CCSwitchSkills {
+    $skillsDirectory = Get-CCSwitchSkillsDirectory
+    $pluginRoot = Find-ClaudeDesktopSkillsPluginRoot
+    $desktopSkillsDirectory = Join-Path $pluginRoot "skills"
+    $manifestPath = Join-Path $pluginRoot "manifest.json"
+    $manifest = Get-JsonObjectOrBackup $manifestPath
+    Ensure-SkillsManifestList $manifest
+
+    $manifestSkills = @($manifest.skills)
+    $existingNames = @{}
+    foreach ($item in $manifestSkills) {
+        if ($item -is [pscustomobject] -and $item.PSObject.Properties.Name -contains "name" -and [string]$item.name) {
+            $existingNames[[string]$item.name] = $true
+        }
+    }
+
+    $ccSkills = @(Get-CCSwitchSkills $skillsDirectory)
+    $now = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+    $linked = 0
+    $manifestAdded = 0
+    $skipped = 0
+
+    Write-Host "Claude Desktop skills plugin: $pluginRoot"
+    Write-Host "CC Switch skills source: $skillsDirectory"
+
+    foreach ($skill in $ccSkills) {
+        $target = Join-Path $desktopSkillsDirectory $skill.Name
+        if ((Test-Path -LiteralPath $target) -or $existingNames.ContainsKey($skill.Name)) {
+            Write-Host "  同名 skill 已存在，跳过: $($skill.Name)" -ForegroundColor DarkYellow
+            $skipped++
+            continue
+        }
+
+        New-Item -ItemType SymbolicLink -Path $target -Target $skill.Path | Out-Null
+        $linked++
+        Write-Host "  同步软链接: $($skill.Name) -> $($skill.Path)" -ForegroundColor Green
+
+        $manifestItem = [pscustomobject][ordered]@{
+            skillId = $skill.Name
+            name = $skill.Name
+            description = $skill.Description
+            creatorType = "user"
+            syncManaged = $false
+            updatedAt = $now
+            enabled = $true
+        }
+        $manifestSkills += $manifestItem
+        $existingNames[$skill.Name] = $true
+        $manifestAdded++
+        Write-Host "  写入 manifest: $($skill.Name)" -ForegroundColor Green
+    }
+
+    if ($manifestAdded -gt 0) {
+        Add-OrSetJsonProperty $manifest "skills" $manifestSkills
+        Add-OrSetJsonProperty $manifest "lastUpdated" ([Int64]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))
+        $backup = Join-Path $pluginRoot "manifest.json.bak-before-cc-switch-sync"
+        Copy-Item $manifestPath $backup -Force
+        Save-JsonNoBom $manifestPath $manifest
+    }
+
+    Write-Host "同步完成：新增软链接 $linked 个，新增 manifest $manifestAdded 条，跳过 $skipped 个。" -ForegroundColor Green
+}
+
+function Unsync-CCSwitchSkills {
+    $skillsDirectory = Get-CCSwitchSkillsDirectory
+    $pluginRoot = Find-ClaudeDesktopSkillsPluginRoot
+    $desktopSkillsDirectory = Join-Path $pluginRoot "skills"
+    $manifestPath = Join-Path $pluginRoot "manifest.json"
+    $manifest = Get-JsonObjectOrBackup $manifestPath
+    Ensure-SkillsManifestList $manifest
+    $removedNames = @{}
+    $skipped = 0
+
+    Write-Host "Claude Desktop skills plugin: $pluginRoot"
+    Write-Host "CC Switch skills source: $skillsDirectory"
+
+    foreach ($targetItem in Get-ChildItem -LiteralPath $desktopSkillsDirectory -Force -ErrorAction SilentlyContinue) {
+        $target = $targetItem.FullName
+        $targetItem = Get-Item -LiteralPath $target -Force
+        if (-not (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint)) {
+            Write-Host "  不是 CC Switch 同步软链接，跳过: $($targetItem.Name)" -ForegroundColor DarkYellow
+            $skipped++
+            continue
+        }
+
+        $linkTarget = Get-ReparsePointTarget $target
+        if (-not $linkTarget) {
+            Write-Host "  无法解析软链接目标，跳过: $target" -ForegroundColor DarkYellow
+            $skipped++
+            continue
+        }
+        if (-not [System.IO.Path]::IsPathRooted($linkTarget)) {
+            $linkTarget = Join-Path $desktopSkillsDirectory $linkTarget
+        }
+        $resolvedTarget = Resolve-ExistingPath $linkTarget
+        if (-not (Test-PathWithinDirectory $resolvedTarget $skillsDirectory)) {
+            Write-Host "  软链接目标不在 CC Switch skills 目录内，跳过: $($targetItem.Name)" -ForegroundColor DarkYellow
+            $skipped++
+            continue
+        }
+
+        Remove-ReparsePoint $target
+        $removedNames[$targetItem.Name] = $true
+        Write-Host "  删除同步: $($targetItem.Name) -> $resolvedTarget" -ForegroundColor Green
+    }
+
+    if ($removedNames.Count -gt 0) {
+        $oldManifestSkills = @($manifest.skills)
+        $keptSkills = @()
+        foreach ($item in $oldManifestSkills) {
+            if ($item -is [pscustomobject] -and $item.PSObject.Properties.Name -contains "name" -and $removedNames.ContainsKey([string]$item.name)) {
+                continue
+            }
+            $keptSkills += $item
+        }
+        $removedManifestCount = $oldManifestSkills.Count - $keptSkills.Count
+        Add-OrSetJsonProperty $manifest "skills" $keptSkills
+        Add-OrSetJsonProperty $manifest "lastUpdated" ([Int64]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()))
+        $backup = Join-Path $pluginRoot "manifest.json.bak-before-cc-switch-sync"
+        Copy-Item $manifestPath $backup -Force
+        Save-JsonNoBom $manifestPath $manifest
+        Write-Host "取消同步完成：删除 $($removedNames.Count) 个软链接，删除 $removedManifestCount 条 manifest 记录，跳过 $skipped 个。" -ForegroundColor Green
+    } else {
+        Write-Host "取消同步完成：删除 0 个，跳过 $skipped 个。" -ForegroundColor Green
     }
 }
 
@@ -2154,17 +2843,160 @@ function Remove-LanguageFiles {
     }
 }
 
+function Test-ClaudeDesktopProcessText {
+    param(
+        [string]$Text,
+        [string]$ClaudePath = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+
+    $normalized = $Text -replace '/', '\'
+    if (-not [string]::IsNullOrWhiteSpace($ClaudePath)) {
+        $appRoot = ([System.IO.Path]::GetFullPath($ClaudePath) -replace '/', '\').TrimEnd('\')
+        return $normalized.IndexOf(($appRoot + "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    }
+
+    return (
+        $normalized -match '(?i)\\WindowsApps\\Claude_[^\\]+\\app\\claude\.exe(?:"|\s|$)' -or
+        $normalized -match '(?i)\\AnthropicClaude\\app-[^\\]+\\claude\.exe(?:"|\s|$)'
+    )
+}
+
+function Add-ClaudeDesktopProcess {
+    param(
+        [hashtable]$Matches,
+        [int]$ProcessId,
+        [string]$MatchText
+    )
+
+    try {
+        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
+        if (-not $Matches.ContainsKey($ProcessId)) {
+            $Matches[$ProcessId] = @{
+                Process = $proc
+                Match = $MatchText
+            }
+        }
+    } catch {
+        # Process may have exited between enumeration and lookup.
+    }
+}
+
+function Get-ClaudeDesktopProcessMatches {
+    param([string]$ClaudePath = $null)
+
+    $matches = @{}
+    try {
+        $wmiProcs = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    } catch {
+        try {
+            $wmiProcs = @(Get-WmiObject -Class Win32_Process -ErrorAction Stop)
+        } catch {
+            $wmiProcs = @()
+        }
+    }
+
+    foreach ($wmiProc in $wmiProcs) {
+        foreach ($candidate in @($wmiProc.ExecutablePath, $wmiProc.CommandLine)) {
+            if (Test-ClaudeDesktopProcessText $candidate $ClaudePath) {
+                Add-ClaudeDesktopProcess $matches ([int]$wmiProc.ProcessId) $candidate
+                break
+            }
+        }
+    }
+
+    if ($matches.Count -eq 0 -and [string]::IsNullOrWhiteSpace($ClaudePath)) {
+        foreach ($proc in Get-Process -Name "claude" -ErrorAction SilentlyContinue) {
+            try {
+                $path = $proc.MainModule.FileName
+                if (Test-ClaudeDesktopProcessText $path) {
+                    Add-ClaudeDesktopProcess $matches $proc.Id $path
+                }
+            } catch {
+                # Without a known ClaudePath, do not guess from inaccessible MainModule.
+            }
+        }
+    }
+
+    return @($matches.Values)
+}
+
+function Stop-ClaudeProcessesGracefully {
+    param(
+        [int]$TimeoutSeconds = 10,
+        [string]$ClaudePath = $null
+    )
+
+    $procs = @()
+    foreach ($entry in Get-ClaudeDesktopProcessMatches $ClaudePath) {
+        $proc = $entry["Process"]
+        Write-Host "  matched Claude Desktop process (PID $($proc.Id)): $($entry["Match"])" -ForegroundColor DarkGray
+        $procs += $proc
+    }
+
+    if ($procs.Count -eq 0) {
+        return $true
+    }
+
+    foreach ($proc in $procs) {
+        Write-Host "  正在请求 Claude Desktop 优雅退出 (PID $($proc.Id))..." -ForegroundColor DarkGray
+        try {
+            $null = & taskkill /PID $proc.Id /T 2>&1
+        } catch {
+            # taskkill failed; continue to forced termination after timeout.
+        }
+    }
+
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        Start-Sleep -Seconds 1
+        $elapsed++
+        $stillRunning = @()
+        foreach ($proc in $procs) {
+            if (-not $proc.HasExited) {
+                $stillRunning += $proc
+            }
+        }
+        if ($stillRunning.Count -eq 0) {
+            Write-Host "  Claude Desktop 已优雅退出" -ForegroundColor Green
+            return $true
+        }
+        $procs = $stillRunning
+    }
+
+    Write-Host "  优雅退出超时（${TimeoutSeconds}秒），强制终止剩余进程..." -ForegroundColor DarkYellow
+    foreach ($proc in $procs) {
+        if (-not $proc.HasExited) {
+            try {
+                $null = & taskkill /PID $proc.Id /T /F 2>&1
+            } catch {
+                # Process may already have exited.
+            }
+        }
+    }
+
+    Start-Sleep -Seconds 1
+    return $false
+}
+
 function Stop-ClaudeProcesses {
-    Stop-Process -Name "Claude" -Force -ErrorAction SilentlyContinue
-    Stop-Process -Name "claude" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    Write-Host "  stopped Claude Desktop if it was running" -ForegroundColor Green
+    param([string]$ClaudePath = $null)
+
+    $killed = Stop-ClaudeProcessesGracefully -TimeoutSeconds 10 -ClaudePath $ClaudePath
+    if ($killed) {
+        Write-Host "  Claude Desktop 已停止" -ForegroundColor Green
+    } else {
+        Write-Host "  已强制停止 Claude Desktop" -ForegroundColor Green
+    }
 }
 
 function Restart-Claude {
     param([string]$ClaudePath)
 
-    Stop-ClaudeProcesses
+    Stop-ClaudeProcesses $ClaudePath
 
     $exe = Get-ClaudeExePath $ClaudePath
     if ($exe) {
@@ -2183,18 +3015,17 @@ function Install-WindowsLanguagePack {
     try {
         Write-Step "[1/9] 检查安装模式"
         if ($PatchMode -eq "safe") {
-            Write-Host "  Cowork 兼容模式：跳过第三方 API 配置检查。" -ForegroundColor Green
+            Write-Host "  Cowork 兼容模式：正在检查第三方 API 配置。" -ForegroundColor Green
+            Assert-ThirdPartyApiConfigured
         } elseif ($PatchMode -eq "official") {
-            Write-Host "  官方账号登录模式：跳过第三方 API 配置检查。" -ForegroundColor Green
-        } elseif (-not (Confirm-InstallWithoutThirdPartyApiConfig)) {
-            return
+            Write-Host "  官方账号登录模式：无需第三方 API 配置检查。" -ForegroundColor Green
+        } else {
+            Write-Host "  第三方 API 登录模式：正在检查第三方 API 配置。" -ForegroundColor Green
+            Assert-ThirdPartyApiConfigured
         }
 
         Write-Step "[2/9] 检查语言资源"
         $pack = Get-LanguageResources $LanguageCode
-
-        Write-Step "关闭 Claude Desktop"
-        Stop-ClaudeProcesses
 
         Write-Step "[3/9] 查找 Claude Desktop"
         $paths = Get-ClaudeResourcesPath
@@ -2203,6 +3034,9 @@ function Install-WindowsLanguagePack {
         $installKind = $paths["InstallKind"]
         Write-Host "  app: $claudePath" -ForegroundColor Green
         Write-Host "  resources: $resourcesPath" -ForegroundColor Green
+
+        Write-Step "关闭 Claude Desktop"
+        Stop-ClaudeProcesses $claudePath
 
         Write-Step "[4/9] 准备写入权限"
         Enable-WriteAccess $resourcesPath
@@ -2269,7 +3103,7 @@ function Uninstall-WindowsLanguagePack {
     $resourcesPath = $paths["Resources"]
 
     Write-Step "关闭 Claude Desktop"
-    Stop-ClaudeProcesses
+    Stop-ClaudeProcesses $claudePath
     Remove-LegacyAppxForkArtifacts
 
     Write-Step "[1/4] 恢复前端 bundle 和 app.asar"
@@ -2293,6 +3127,10 @@ try {
     switch ($Action) {
         "install" { Install-WindowsLanguagePack }
         "uninstall" { Uninstall-WindowsLanguagePack }
+        "disable-updates" { Set-ThirdPartyAutoUpdates $false }
+        "enable-updates" { Set-ThirdPartyAutoUpdates $true }
+        "sync-skills" { Sync-CCSwitchSkills }
+        "unsync-skills" { Unsync-CCSwitchSkills }
     }
 
     Stop-InstallLog
